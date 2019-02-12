@@ -75,7 +75,7 @@ options:
    networks:
      description:
      - A list of network adapters.
-     - C(label) or C(device_type) is required to reconfigure or remove an existing network adapter. 
+     - C(label) or C(device_type) is required to reconfigure or remove an existing network adapter.
      - 'If there are multiple network adapters with the same C(device_type), you should set C(label),
         or will use the first matched network adapter.'
      - 'Valid attributes are:'
@@ -321,12 +321,12 @@ class PyVmomiHelper(PyVmomi):
                     for dvp in dvps:
                         if hasattr(dvp.config.defaultPortConfig, 'vlan') and \
                                 isinstance(dvp.config.defaultPortConfig.vlan.vlanId, int) and \
-                                        str(dvp.config.defaultPortConfig.vlan.vlanId) == str(network['vlan']):
+                                str(dvp.config.defaultPortConfig.vlan.vlanId) == str(network['vlan']):
                             network['name'] = dvp.config.name
                             break
                         if 'dvswitch_name' in network and \
-                                        dvp.config.distributedVirtualSwitch.name == network['dvswitch_name'] and \
-                                        dvp.config.name == network['vlan']:
+                                dvp.config.distributedVirtualSwitch.name == network['dvswitch_name'] and \
+                                dvp.config.name == network['vlan']:
                             network['name'] = dvp.config.name
                             break
                         if dvp.config.name == network['vlan']:
