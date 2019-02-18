@@ -75,14 +75,17 @@ options:
    networks:
      description:
      - A list of network adapters.
-     - C(label) or C(device_type) is required to reconfigure or remove an existing network adapter.
-     - 'If there are multiple network adapters with the same C(device_type), you should set C(label),
-        or will use the first matched network adapter.'
+     - C(mac) or C(label) or C(device_type) is required to reconfigure or remove an existing network adapter.
+     - 'If there are multiple network adapters with the same C(device_type), you should set C(label) or C(mac) to match
+        one of them, or will apply changes on all network adapters with the C(device_type) specified.'
+     - 'C(mac), C(label), C(device_type) is the order of precedence from greatest to least if all set.'
      - 'Valid attributes are:'
-     - ' - C(label) (string): Network adapter label, e.g., "Network adapter 1", used to find the network adapter to
-           reconfigure or remove if there are more than one network adapters with the same C(device_type).'
-     - ' - C(device_type) (string): Valid virtual network device types are: C(e1000), C(e1000e), C(pcnet32), C(vmxnet2),
-           C(vmxnet3) (default), C(sriov). Used to add new network adapter or reconfigure an existing one with this type.'
+     - ' - C(mac) (string): MAC address of the existing network adapter to be reconfigured or removed.'
+     - ' - C(label) (string): Label of the existing network adapter to be reconfigured or removed, e.g., "Network adapter 1".'
+     - ' - C(device_type) (string): Valid virtual network device types are: 
+           C(e1000), C(e1000e), C(pcnet32), C(vmxnet2), C(vmxnet3) (default), C(sriov).
+           Used to add new network adapter, reconfigure or remove the existing network adapter with this type.
+           If C(mac) and C(label) not specified or not find network adapter by C(mac) or C(label) will use this parameter.' 
      - ' - C(name) (string): Name of the portgroup or distributed virtual portgroup for this interface.
            When specifying distributed virtual portgroup make sure given C(esxi_hostname) or C(cluster) is associated with it.'
      - ' - C(vlan) (integer): VLAN number for this interface.'
@@ -92,8 +95,9 @@ options:
      - '   If set to C(present), then will do reconfiguration for the specified network adapter.'
      - '   If set to C(new), then will add the specified network adapter.'
      - '   If set to C(absent), then will remove this network adapter.'
-     - ' - C(mac) (string): Manual specified MAC address of the network adapter. VM in the powered off state is required
-           when reconfigure MAC address.'
+     - ' - C(manual_mac) (string): Manual specified MAC address of the network adapter when creating, or reconfiguring.
+           If not specified when creating new network adapter, mac address will be generated automatically.
+           When reconfigure MAC address, VM should be in powered off state.'
      - ' - C(connected) (bool): Indicates that virtual network adapter connects to the associated virtual machine.'
      - ' - C(start_connected) (bool): Indicates that virtual network adapter starts with associated virtual machine powers on.'
 extends_documentation_fragment: vmware.documentation
@@ -112,15 +116,15 @@ EXAMPLES = '''
     networks:
       - name: "VM Network"
         state: new
-        mac: "00:50:56:11:22:33"
+        manual_mac: "00:50:56:11:22:33"
       - state: present
         device_type: e1000e
-        mac: "00:50:56:44:55:66"
+        manual_mac: "00:50:56:44:55:66"
       - state: present
         label: "Network adapter 3"
         connected: false
       - state: absent
-        label: "Network adapter 4"
+        mac: "00:50:56:44:55:77"
   delegate_to: localhost
   register: network_facts
 '''
@@ -215,6 +219,20 @@ class PyVmomiHelper(PyVmomi):
                 return True
         return False
 
+    def get_network_device_by_mac(self, vm=None, mac=None):
+        """ Get network adapter with the specified mac address"""
+        nic_device = None
+        if vm is None or mac is None:
+            return nic_device
+        for device in vm.config.hardware.device:
+            for device_type in self.nic_device_type.keys():
+                if isinstance(device, self.nic_device_type[device_type]):
+                    if device.macAddress == mac:
+                        nic_device = device
+                        break
+
+        return nic_device
+
     def get_network_devices_by_type(self, vm=None, device_type=None):
         """ Get network adapter list with the name type """
         nic_devices = []
@@ -257,9 +275,9 @@ class PyVmomiHelper(PyVmomi):
         nic.device.connectable.startConnected = bool(device_info.get('start_connected', True))
         nic.device.connectable.allowGuestControl = True
         nic.device.connectable.connected = True
-        if 'mac' in device_info:
+        if 'manual_mac' in device_info:
             nic.device.addressType = 'manual'
-            nic.device.macAddress = device_info['mac']
+            nic.device.macAddress = device_info['manual_mac']
         else:
             nic.device.addressType = 'generated'
 
@@ -339,9 +357,10 @@ class PyVmomiHelper(PyVmomi):
                     self.module.fail_json(msg="Device type specified '%s' is invalid. "
                                               "Valid types %s " % (network['device_type'], self.nic_device_type.keys()))
 
-                if 'mac' in network and not self.is_valid_mac_addr(network['mac']):
-                    self.module.fail_json(msg="Device MAC address '%s' is invalid. "
-                                              "Please provide correct MAC address." % network['mac'])
+                if ('mac' in network and not self.is_valid_mac_addr(network['mac'])) or \
+                        ('manual_mac' in network and not self.is_valid_mac_addr(network['manual_mac'])):
+                    self.module.fail_json(msg="Device MAC address '%s' or manual set MAC address %s is invalid. "
+                                              "Please provide correct MAC address." % (network['mac'], network['manual_mac']))
 
                 network_list.append(network)
 
@@ -355,45 +374,52 @@ class PyVmomiHelper(PyVmomi):
                 nic_spec = self.create_network_adapter(network)
                 nic_spec.operation = vim.vm.device.VirtualDeviceSpec.Operation.add
                 self.change_detected = True
+                self.config_spec.deviceChange.append(nic_spec)
             # reconfigure network adapter or remove network adapter
             else:
-                nic_device = None
-                if 'label' in network:
-                    nic_device = self.get_network_device_by_label(vm_obj, device_label=network['label'])
-                elif 'label' not in network and 'device_type' in network:
+                nic_devices = []
+                if 'mac' in network:
+                    nic = self.get_network_device_by_mac(vm_obj, mac=network['mac'])
+                    if nic is not None:
+                        nic_devices.append(nic)
+                if 'label' in network and len(nic_devices) == 0:
+                    nic = self.get_network_device_by_label(vm_obj, device_label=network['label'])
+                    if nic is not None:
+                        nic_devices.append(nic)
+                if 'device_type' in network and len(nic_devices) == 0:
                     nic_devices = self.get_network_devices_by_type(vm_obj, device_type=network['device_type'])
-                    if len(nic_devices) != 0:
-                        nic_device = nic_devices[0]
-                else:
-                    self.module.fail_json(msg="Should specify 'label' or 'device_type' parameter to reconfigure network adapter")
-                if nic_device is not None:
-                    nic_spec = vim.vm.device.VirtualDeviceSpec()
-                    if network['state'].lower() == 'present':
-                        nic_spec.operation = vim.vm.device.VirtualDeviceSpec.Operation.edit
-                        nic_spec.device = nic_device
-                        if 'start_connected' in network and nic_device.connectable.startConnected != network['start_connected']:
-                            nic_device.connectable.startConnected = network['start_connected']
+                if 'mac' not in network and 'label' not in network and 'device_type' not in network:
+                    self.module.fail_json(msg="Should specify 'mac', 'label' or 'device_type' parameter to reconfigure network adapter")
+                if len(nic_devices) != 0:
+                    for nic_device in nic_devices:
+                        nic_spec = vim.vm.device.VirtualDeviceSpec()
+                        if network['state'].lower() == 'present':
+                            nic_spec.operation = vim.vm.device.VirtualDeviceSpec.Operation.edit
+                            nic_spec.device = nic_device
+                            if 'start_connected' in network and nic_device.connectable.startConnected != network['start_connected']:
+                                nic_device.connectable.startConnected = network['start_connected']
+                                self.change_detected = True
+                            if 'connected' in network and nic_device.connectable.connected != network['connected']:
+                                nic_device.connectable.connected = network['connected']
+                                self.change_detected = True
+                            if 'name' in network and nic_device.deviceInfo.summary != network['name']:
+                                nic_device.deviceInfo.summary = network['name']
+                                self.change_detected = True
+                            if 'manual_mac' in network and nic_device.macAddress != network['manual_mac']:
+                                if vm_obj.runtime.powerState != vim.VirtualMachinePowerState.poweredOff:
+                                    self.module.fail_json(msg='Expected power state is poweredOff to reconfigure MAC address')
+                                nic_device.addressType = 'manual'
+                                nic_device.macAddress = network['manual_mac']
+                                self.change_detected = True
+                            if self.change_detected:
+                                self.config_spec.deviceChange.append(nic_spec)
+                        elif network['state'].lower() == 'absent':
+                            nic_spec.operation = vim.vm.device.VirtualDeviceSpec.Operation.remove
+                            nic_spec.device = nic_device
                             self.change_detected = True
-                        if 'connected' in network and nic_device.connectable.connected != network['connected']:
-                            nic_device.connectable.connected = network['connected']
-                            self.change_detected = True
-                        if nic_device.deviceInfo.summary != network['name']:
-                            nic_device.deviceInfo.summary = network['name']
-                            self.change_detected = True
-                        if 'mac' in network and nic_device.macAddress != network['mac']:
-                            if vm_obj.runtime.powerState != vim.VirtualMachinePowerState.poweredOff:
-                                self.module.fail_json(msg='Expected power state is poweredOff to reconfigure MAC address')
-                            nic_device.addressType = 'manual'
-                            nic_device.macAddress = network['mac']
-                            self.change_detected = True
-                    elif network['state'].lower() == 'absent':
-                        nic_spec.operation = vim.vm.device.VirtualDeviceSpec.Operation.remove
-                        nic_spec.device = nic_device
-                        self.change_detected = True
+                            self.config_spec.deviceChange.append(nic_spec)
                 else:
                     self.module.fail_json(msg='Unable to find the specified network adapter: %s' % network)
-            if self.change_detected:
-                self.config_spec.deviceChange.append(nic_spec)
 
     def reconfigure_vm_network(self, vm_obj):
         network_list = self.sanitize_network_params()
