@@ -82,10 +82,10 @@ options:
      - 'Valid attributes are:'
      - ' - C(mac) (string): MAC address of the existing network adapter to be reconfigured or removed.'
      - ' - C(label) (string): Label of the existing network adapter to be reconfigured or removed, e.g., "Network adapter 1".'
-     - ' - C(device_type) (string): Valid virtual network device types are: 
+     - ' - C(device_type) (string): Valid virtual network device types are:
            C(e1000), C(e1000e), C(pcnet32), C(vmxnet2), C(vmxnet3) (default), C(sriov).
            Used to add new network adapter, reconfigure or remove the existing network adapter with this type.
-           If C(mac) and C(label) not specified or not find network adapter by C(mac) or C(label) will use this parameter.' 
+           If C(mac) and C(label) not specified or not find network adapter by C(mac) or C(label) will use this parameter.'
      - ' - C(name) (string): Name of the portgroup or distributed virtual portgroup for this interface.
            When specifying distributed virtual portgroup make sure given C(esxi_hostname) or C(cluster) is associated with it.'
      - ' - C(vlan) (integer): VLAN number for this interface.'
