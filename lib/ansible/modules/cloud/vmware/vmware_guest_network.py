@@ -274,7 +274,7 @@ class PyVmomiHelper(PyVmomi):
         nic.device.connectable = vim.vm.device.VirtualDevice.ConnectInfo()
         nic.device.connectable.startConnected = bool(device_info.get('start_connected', True))
         nic.device.connectable.allowGuestControl = True
-        nic.device.connectable.connected = True
+        nic.device.connectable.connected = bool(device_info.get('connected', True))
         if 'manual_mac' in device_info:
             nic.device.addressType = 'manual'
             nic.device.macAddress = device_info['manual_mac']
