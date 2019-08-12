@@ -1,0 +1,2 @@
+bugfixes:
+  - proxmox_kvm - fixed issue when get_vmid is called 'too early' after the creation of a VM that has no name item yet (https://github.com/ansible/ansible/issues/58194).
